@@ -15,7 +15,8 @@ from .infrastructure.errors import BatchExpiredError, WorkflowBudgetExceededErro
 from .internal import CandidateCheck, OpportunityRecord, SearchPlan
 from .repository import normalize
 from .schemas import ConstraintIssue, DiscoveryRequest, DiscoveryResponse, Recommendation, SearchConstraints, SimilarAlternative
-from .tools import rank_candidates, search_opportunities
+from .scoring import score_and_rank
+from .tools import search_opportunities
 from .validation import check_candidate, validate_explanations
 
 
@@ -33,6 +34,7 @@ class DiscoveryState(TypedDict, total=False):
     batch_token: str | None
     has_more: bool
     similar_issues: dict[str, list[ConstraintIssue]]
+    match_scores: dict[str, int]
 
 
 def response(state, status, message, **kwargs):
@@ -136,8 +138,10 @@ def rank(state):
     if state.get('similar_issues'):
         return {'selected': state['candidates'][:3]}
     request = state['request']
-    ordered = rank_candidates(state['candidates'], state['plan'], request.profile, limit=None)
-    signature = tuple((r.opportunity_id, r.evidence_version or '') for r in ordered)
+    scored = score_and_rank(state['candidates'], state['plan'], request.profile, state['constraints'])
+    ordered = [record for record, _ in scored]
+    scores = {record.opportunity_id: percentage for record, percentage in scored}
+    signature = tuple((r.opportunity_id, r.evidence_version or '', percentage) for r, percentage in scored)
     if 'batch_session' in state and state['batch_session'].ordered != signature:
         # Revalidate the cohort without silently shifting page boundaries.
         raise BatchExpiredError()
@@ -148,7 +152,7 @@ def rank(state):
     if not token and len(ordered) > 3:
         token = state['deps'].batches.create(request, state['plan'], state['constraints'], state['filters'], signature)
     return {'selected': ordered[start:start + 3], 'batch_token': token,
-            'has_more': start + 3 < len(ordered)}
+            'has_more': start + 3 < len(ordered), 'match_scores': scores}
 
 
 def explain(state):
@@ -170,6 +174,7 @@ def explain(state):
             application_status=record.application_status, eligibility_status='uncertain' if issues else checked.eligibility_status,
             source_ids=record.source_ids, reason=reason, caveats=checked.caveats,
             match_summary=build_match_summary(record, state['plan'], state['constraints'], state['request'].profile),
+            relevance_score=None if issues else state['match_scores'][record.opportunity_id],
             next_action='راجع التفاصيل والشروط مع الجهة. بيانات وعناوين هذا التمرين خيالية.',
             **extra,
         ))

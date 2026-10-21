@@ -23,7 +23,7 @@ class SearchSession:
     plan: SearchPlan
     constraints: SearchConstraints
     filters: tuple[str, ...]
-    ordered: tuple[tuple[str, str], ...]
+    ordered: tuple[tuple[str, str, int], ...]
 
 
 class SearchBatchCache:

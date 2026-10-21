@@ -28,9 +28,9 @@ export default function OpportunityCard({ rec, onOpen, failedConstraints }: Prop
           <div className="opp__meta">{meta}</div>
         </div>
         {rec.relevance_score != null && (
-          <div className="opp__score">
-            <small>الملاءمة</small>
-            <strong>{Math.round(rec.relevance_score)}%</strong>
+          <div className="opp__score" title="مطابقة المعايير المحددة، وليست تأكيدًا للأهلية">
+            <strong><bdi dir="ltr">{rec.relevance_score}%</bdi> مطابقة</strong>
+            <small>معايير البحث المحددة</small>
           </div>
         )}
       </div>

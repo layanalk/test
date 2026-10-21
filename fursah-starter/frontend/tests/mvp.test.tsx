@@ -174,3 +174,31 @@ test('summary and original quote have independent visible sections and user text
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /<script>/);
 });
+
+for (const score of [0, 94, 100]) {
+  test(`prominently renders final ${score}% match separately from summary and evidence`, () => {
+    const html = renderToStaticMarkup(<OpportunityCard rec={{ ...recommendation(1), relevance_score: score }} onOpen={() => {}} />);
+    assert.match(html, new RegExp(`<bdi dir="ltr">${score}%</bdi> مطابقة`));
+    assert.match(html, /أوجه المطابقة المثبتة/);
+    assert.match(html, /اقتباس من المصدر/);
+    assert.match(html, /ليست تأكيدًا للأهلية/);
+  });
+}
+
+test('API preserves globally descending percentages in each requested batch', async () => {
+  const first = response(3);
+  first.recommendations.forEach((rec, index) => { rec.relevance_score = [94, 88, 82][index]; });
+  first.batch_token = '0123456789abcdef'; first.has_more = true;
+  mockResponse(first);
+  const received = await discover(request);
+  assert.deepEqual(received.recommendations.map(rec => rec.relevance_score), [94, 88, 82]);
+  const html = renderResults(received);
+  assert.ok(html.indexOf('94%') < html.indexOf('88%') && html.indexOf('88%') < html.indexOf('82%'));
+  const second = response(2);
+  second.recommendations = [{ ...recommendation(4), relevance_score: 76 }, { ...recommendation(5), relevance_score: 63 }];
+  second.batch_token = first.batch_token; second.batch_index = 1;
+  const calls = mockResponse(second);
+  const page = await discover({ ...request, batch_token: first.batch_token, batch_index: 1 });
+  assert.deepEqual(page.recommendations.map(rec => rec.relevance_score), [76, 63]);
+  assert.equal(calls.length, 1);
+});

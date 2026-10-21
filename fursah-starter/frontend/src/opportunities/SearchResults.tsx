@@ -41,6 +41,7 @@ export default function SearchResults({ view, res, onEditProfile, onRetry, onFoc
             <h2>الفرص المقترحة</h2>
             <p>{summaryText(res.recommendations.length)}</p>
           </div>
+          <p className="muted">النسبة تقيس مطابقة المعايير المحددة، وليست تأكيدًا للأهلية. ترتيب النتائج من الأعلى إلى الأقل.</p>
           {res.message && <p className="notice">{res.message}</p>}
           {res.recommendations.map(r => (
             <OpportunityCard key={r.opportunity_id} rec={r} onOpen={() => onOpenDetails(r)} />

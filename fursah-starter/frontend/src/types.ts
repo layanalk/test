@@ -64,7 +64,7 @@ export interface Recommendation {
   match_summary?: string | null;
   caveats: string[];
   source_ids: string[];
-  relevance_score?: number | null; // 0–100
+  relevance_score?: number | null; // Python-calculated criteria coverage, 0–100; not eligibility confidence.
   next_action?: string | null;
 }
 
