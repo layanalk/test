@@ -47,7 +47,7 @@ def stub(deps, plan=None, failure=None):
         else:
             payload = json.loads(body['messages'][1]['content'])
             if 'opportunities' in payload:
-                items = [{'opportunity_id': r['opportunity_id'], 'quotes': [r['sources'][0]['content'].split('\n')[0]]}
+                items = [{'opportunity_id': r['opportunity_id'], 'quotes': [r['sources'][0]['content'][:160].strip()]}
                          for r in payload['opportunities']]
                 if failure == 'invented_id': items[0]['opportunity_id'] = 'INVENTED'
                 if failure == 'invented_quote': items[0]['quotes'] = ['This evidence was invented by the model.']
@@ -77,7 +77,7 @@ def test_graph_returns_three_grounded_results(deps):
         record = deps.repository.get_record(rec.opportunity_id)
         assert rec.evidence_version == record.evidence_version and rec.source_ids == record.source_ids
         assert rec.eligibility_status == 'uncertain'
-        assert any(s.content.split('\n')[0] in rec.reason for s in record.sources)
+        assert any(s.content[:160].strip() in rec.reason for s in record.sources)
     assert {r.opportunity_id for r in result.recommendations}.isdisjoint({'OPP-0014','OPP-0054','OPP-0099','OPP-0005','OPP-0045'})
 
 

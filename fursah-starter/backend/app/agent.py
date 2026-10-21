@@ -146,10 +146,12 @@ class OpenRouterAgent:
 
     async def explain(self, query: str, records: list[OpportunityRecord]) -> ExplanationBatch:
         return await self._structured(
-            'For EACH selected opportunity, choose one or two short VERBATIM excerpts from its '
-            'source content that explain its connection to the user query. Return its exact ID and '
-            'quotes only. Do not add interpretations, ellipses, claims or eligibility decisions. '
-            'You cannot replace, reorder or add selected opportunities.',
+            'Select evidence, do not write an analysis. For EACH supplied opportunity, '
+            'return its exact opportunity_id and a quotes array with EXACTLY ONE '
+            'VERBATIM source passage of 8 to 160 characters related to the query. '
+            'Return only the compact JSON object with an explanations array. '
+            'No reasoning, commentary, paraphrases, ellipses, or other fields. '
+            'Do not replace, reorder, or add opportunities; do not decide eligibility.',
             {'query': query, 'opportunities': [
                 {'opportunity_id': r.opportunity_id,
                  'sources': [s.model_dump(mode='json') for s in r.sources]}

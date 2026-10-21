@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .schemas import NonBlank, OpportunityDetailsResponse, SearchConstraints
 
@@ -72,7 +72,7 @@ class EvidenceExplanation(BaseModel):
     model_config = ConfigDict(extra='forbid')
     opportunity_id: NonBlank
     # The agent chooses supporting passages; server verifies each verbatim.
-    quotes: list[NonBlank] = Field(min_length=1, max_length=2)
+    quotes: list[Annotated[NonBlank, Field(min_length=8, max_length=160)]] = Field(min_length=1, max_length=1)
 
 
 class ExplanationBatch(BaseModel):
