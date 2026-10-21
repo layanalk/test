@@ -44,6 +44,8 @@ export interface DiscoveryRequest {
   query: string; // 1–2000 chars
   profile: Profile;
   constraints: Constraints;
+  batch_token?: string | null;
+  batch_index?: number;
 }
 
 /* ---------- Discovery response ---------- */
@@ -59,10 +61,22 @@ export interface Recommendation {
   application_status?: string | null;
   eligibility_status: EligibilityStatus;
   reason: string;
+  match_summary?: string | null;
   caveats: string[];
   source_ids: string[];
   relevance_score?: number | null; // 0–100
   next_action?: string | null;
+}
+
+export interface ConstraintIssue {
+  field: keyof Constraints;
+  status: 'not_met' | 'unknown';
+  message: string;
+}
+
+export interface SimilarAlternative extends Recommendation {
+  failed_constraints: ConstraintIssue[];
+  eligibility_status: 'uncertain';
 }
 
 export interface DiscoveryResponse {
@@ -75,6 +89,10 @@ export interface DiscoveryResponse {
   recommendations: Recommendation[]; // max 3 rendered
   missing_fields: string[];          // e.g. "profile.city"
   error_code: string | null;
+  similar_alternatives?: SimilarAlternative[];
+  batch_token?: string | null;
+  batch_index?: number;
+  has_more?: boolean;
 }
 
 /* ---------- Opportunity details ---------- */

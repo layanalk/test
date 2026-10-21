@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { ApiResult, OpportunityDetails as Details, Recommendation } from '../types';
+import type { ApiResult, OpportunityDetails as Details, Recommendation, SimilarAlternative } from '../types';
 import { UNKNOWN, fmtCost, fmtDate, fmtDeadline, label, modeLabel } from '../labels';
 import { getOpportunity } from '../api/client';
 import { EligibilityBadge } from './OpportunityCard';
@@ -8,7 +8,7 @@ import Drawer from '../components/Drawer';
 type State = { loading: true } | { loading: false; result: ApiResult<Details> };
 
 /** Source-grounded detail view. Shows only what the backend returns. */
-export default function OpportunityDetails({ rec, onClose }: { rec: Recommendation; onClose: () => void }) {
+export default function OpportunityDetails({ rec, onClose }: { rec: Recommendation | SimilarAlternative; onClose: () => void }) {
   const [state, setState] = useState<State>({ loading: true });
 
   useEffect(() => {
@@ -79,6 +79,9 @@ export default function OpportunityDetails({ rec, onClose }: { rec: Recommendati
           {!det && <p className="notice">هذه معلومات من البحث السابق؛ تعذّر التحقق من التفاصيل الحالية.</p>}
           <div><EligibilityBadge status={!evidenceMatches || attendanceConflict ? 'uncertain' : rec.eligibility_status} /></div>
           {!evidenceMatches || attendanceConflict ? <p className="muted">التقييم والتفسير السابقان غير معتمدين حاليًا. أعد البحث للتحقق من الأهلية.</p> : <>
+            {'failed_constraints' in rec && <div className="notice"><strong>بديل لا يستوفي جميع القيود</strong>
+              <ul>{rec.failed_constraints.map(issue => <li key={issue.field}>{issue.message}</li>)}</ul></div>}
+            {rec.match_summary && <p>{rec.match_summary}</p>}
             {rec.reason && <div className="block__text">{rec.reason}</div>}
           {rec.caveats.map((c, i) => <div key={i} className="caveat-line">! {c}</div>)}
           {rec.next_action && <div className="small"><strong>الخطوة التالية:</strong> {rec.next_action}</div>}

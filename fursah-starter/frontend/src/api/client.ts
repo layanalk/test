@@ -53,6 +53,7 @@ function validRecommendation(value: unknown): value is Recommendation {
   return (value.evidence_version == null || nonempty(value.evidence_version)) && nonempty(value.opportunity_id) && nonempty(value.title)
     && (value.eligibility_status === 'confirmed' || value.eligibility_status === 'uncertain')
     && typeof value.reason === 'string' && strings(value.caveats) && strings(value.source_ids) && value.source_ids.length > 0 && value.source_ids.every(nonempty)
+    && (value.match_summary == null || nonempty(value.match_summary))
     && ['opportunity_type', 'location', 'delivery_mode', 'deadline', 'application_status', 'next_action'].every(key => optionalText(value[key]))
     && optionalNumber(value.relevance_score)
     && (value.relevance_score == null || (typeof value.relevance_score === 'number' && value.relevance_score >= 0 && value.relevance_score <= 100));
@@ -63,6 +64,22 @@ function validDiscovery(value: unknown): value is DiscoveryResponse {
     || !Array.isArray(value.recommendations) || !value.recommendations.every(validRecommendation)
     || !strings(value.missing_fields) || !optionalText(value.error_code)) return false;
   if (value.interpreted_filters !== undefined && !strings(value.interpreted_filters) || value.missing_explanations !== undefined && !strings(value.missing_explanations) || value.constraint_conflict !== undefined && typeof value.constraint_conflict !== 'boolean') return false;
+  const alternatives = value.similar_alternatives ?? [];
+  if (!Array.isArray(alternatives) || alternatives.length > 3 || !alternatives.every(item =>
+    validRecommendation(item) && object(item) && item.eligibility_status === 'uncertain'
+    && Array.isArray(item.failed_constraints) && item.failed_constraints.length >= 1 && item.failed_constraints.length <= 7
+    && item.failed_constraints.every(issue => object(issue)
+      && typeof issue.field === 'string' && ['location_preference', 'opportunity_types', 'delivery_modes', 'available_from', 'available_to', 'max_duration_days', 'max_budget_sar'].includes(issue.field)
+      && typeof issue.status === 'string' && ['not_met', 'unknown'].includes(issue.status) && nonempty(issue.message)))) return false;
+  if (alternatives.length && value.status !== 'no_match') return false;
+  if (value.batch_token != null && (typeof value.batch_token !== 'string' || value.batch_token.length < 16 || value.batch_token.length > 80)) return false;
+  const page = value.batch_index ?? 0;
+  if (typeof page !== 'number' || !Number.isSafeInteger(page) || page < 0) return false;
+  if (value.has_more !== undefined && typeof value.has_more !== 'boolean') return false;
+  if ((page > 0 || value.has_more) && !value.batch_token) return false;
+  if (value.status !== 'ok' && (page > 0 || value.has_more || value.batch_token)) return false;
+  const ids = [...value.recommendations, ...alternatives].map(item => item.opportunity_id);
+  if (new Set(ids).size !== ids.length) return false;
   const count = value.recommendations.length;
   switch (value.status) {
     case 'ok': return count >= 1 && count <= 3 && value.missing_fields.length === 0 && value.error_code == null;
@@ -103,6 +120,9 @@ export async function discover(request: DiscoveryRequest, signal?: AbortSignal):
     return failure(requestId, 'FURSAH_REQUEST_VALIDATION_ERROR', 'اكتب طلبًا من 1 إلى 2000 حرف.');
   const constraintError = validateConstraints(constraints);
   if (constraintError) return failure(requestId, 'FURSAH_REQUEST_VALIDATION_ERROR', constraintError);
+  const page = request.batch_index ?? 0;
+  if (!Number.isSafeInteger(page) || page < 0 || (page > 0 && !request.batch_token))
+    return failure(requestId, 'FURSAH_REQUEST_VALIDATION_ERROR', 'ابدأ بحثًا جديدًا قبل طلب دفعة أخرى.');
 
   const response = await send(DISCOVER_PATH, {
     method: 'POST', signal, body: JSON.stringify({ ...request, query: request.query.trim(), request_id: requestId }),

@@ -7,12 +7,14 @@ from typing import TypedDict
 from uuid import uuid4
 from langgraph.graph import END, START, StateGraph
 from langgraph.errors import GraphRecursionError
-from .explanations import build_explanations
+from .alternatives import select_similar
+from .batching import SearchSession
+from .explanations import build_explanations, build_match_summary
 from .infrastructure.dependencies import AppDependencies
-from .infrastructure.errors import WorkflowBudgetExceededError
+from .infrastructure.errors import BatchExpiredError, WorkflowBudgetExceededError
 from .internal import CandidateCheck, OpportunityRecord, SearchPlan
 from .repository import normalize
-from .schemas import DiscoveryRequest, DiscoveryResponse, Recommendation, SearchConstraints
+from .schemas import ConstraintIssue, DiscoveryRequest, DiscoveryResponse, Recommendation, SearchConstraints, SimilarAlternative
 from .tools import rank_candidates, search_opportunities
 from .validation import check_candidate, validate_explanations
 
@@ -27,6 +29,10 @@ class DiscoveryState(TypedDict, total=False):
     checks: dict[str, CandidateCheck]
     selected: list[OpportunityRecord]
     response: DiscoveryResponse
+    batch_session: SearchSession
+    batch_token: str | None
+    has_more: bool
+    similar_issues: dict[str, list[ConstraintIssue]]
 
 
 def response(state, status, message, **kwargs):
@@ -36,6 +42,11 @@ def response(state, status, message, **kwargs):
 
 async def interpret(state):
     request = state['request']
+    if request.batch_token:
+        session = state['deps'].batches.get(request)
+        return {'plan': session.plan.model_copy(deep=True),
+                'constraints': session.constraints.model_copy(deep=True),
+                'filters': list(session.filters), 'batch_session': session}
     plan = await state['deps'].agent.interpret(request.query)
     effective = request.constraints.model_dump()
     conflicts = []
@@ -103,18 +114,41 @@ def validate(state):
               state['request'].profile, deps.evaluation_time) for record in state['candidates']}
     accepted = [r for r in state['candidates'] if checks[r.opportunity_id].accepted]
     if not accepted:
+        if 'batch_session' in state:
+            raise BatchExpiredError()
         missing = sorted({f for check in checks.values() for f in check.missing_fields})
         if missing:
             result = response(state, 'needs_info', 'بعض الفرص المطابقة تتطلب مهارات محددة. أضف مهاراتك أو اختر صراحة أنك لا تملكها ثم أعد البحث.',
                               missing_fields=missing, missing_explanations=['لا نطلب هذه المعلومات إلا لوجود متطلب مهارة في مصدر فرصة مطابقة.'])
         else:
+            similar = select_similar(state['candidates'], state['plan'], state['constraints'],
+                                     state['request'].profile, deps.evaluation_time)
+            if similar:
+                return {'candidates': [r for r, _, _ in similar],
+                        'checks': {r.opportunity_id: checked for r, checked, _ in similar},
+                        'similar_issues': {r.opportunity_id: issues for r, _, issues in similar}}
             result = response(state, 'no_match', 'لم نجد فرصة مدعومة بالأدلة ضمن الإعلانات تطابق هذه القيود. يمكنك تعديل البحث؛ لم نخفف القيود تلقائيًا.')
         return {'response': result}
     return {'candidates': accepted, 'checks': checks}
 
 
 def rank(state):
-    return {'selected': rank_candidates(state['candidates'], state['plan'], state['request'].profile)}
+    if state.get('similar_issues'):
+        return {'selected': state['candidates'][:3]}
+    request = state['request']
+    ordered = rank_candidates(state['candidates'], state['plan'], request.profile, limit=None)
+    signature = tuple((r.opportunity_id, r.evidence_version or '') for r in ordered)
+    if 'batch_session' in state and state['batch_session'].ordered != signature:
+        # Revalidate the cohort without silently shifting page boundaries.
+        raise BatchExpiredError()
+    start = request.batch_index * 3
+    if start >= len(ordered):
+        raise BatchExpiredError()
+    token = request.batch_token
+    if not token and len(ordered) > 3:
+        token = state['deps'].batches.create(request, state['plan'], state['constraints'], state['filters'], signature)
+    return {'selected': ordered[start:start + 3], 'batch_token': token,
+            'has_more': start + 3 < len(ordered)}
 
 
 def explain(state):
@@ -126,15 +160,25 @@ def explain(state):
         checked = state['checks'][record.opportunity_id]
         # Only verified source passages enter the explanation. The agent cannot assign eligibility or IDs.
         reason = 'من نص الإعلان: ' + ' — '.join('«' + q + '»' for q in quotes[record.opportunity_id])
-        recommendations.append(Recommendation(
+        issues = state.get('similar_issues', {}).get(record.opportunity_id)
+        model = SimilarAlternative if issues else Recommendation
+        extra = {'failed_constraints': issues} if issues else {}
+        recommendations.append(model(
             opportunity_id=record.opportunity_id, evidence_version=record.evidence_version,
             title=record.title, opportunity_type=record.opportunity_type, location=record.location,
             delivery_mode=record.delivery_mode, deadline=record.deadline,
-            application_status=record.application_status, eligibility_status=checked.eligibility_status,
+            application_status=record.application_status, eligibility_status='uncertain' if issues else checked.eligibility_status,
             source_ids=record.source_ids, reason=reason, caveats=checked.caveats,
+            match_summary=build_match_summary(record, state['plan'], state['constraints'], state['request'].profile),
             next_action='راجع التفاصيل والشروط مع الجهة. بيانات وعناوين هذا التمرين خيالية.',
+            **extra,
         ))
-    return {'response': response(state, 'ok', 'هذه نتائج مستندة إلى الإعلانات التعليمية؛ الشروط والمعلومات غير المؤكدة تحتاج إلى مراجعة الجهة.', recommendations=recommendations)}
+    if state.get('similar_issues'):
+        return {'response': response(state, 'no_match', 'لا توجد نتائج تستوفي جميع قيودك. هذه بدائل قريبة لا تطابق بعض القيود؛ راجع الاختلافات قبل تغيير بحثك.',
+                                     similar_alternatives=recommendations)}
+    return {'response': response(state, 'ok', 'هذه نتائج مستندة إلى الإعلانات التعليمية؛ الشروط والمعلومات غير المؤكدة تحتاج إلى مراجعة الجهة.',
+                                recommendations=recommendations, batch_token=state.get('batch_token'),
+                                batch_index=state['request'].batch_index, has_more=state.get('has_more', False))}
 
 
 def continue_or_end(state):

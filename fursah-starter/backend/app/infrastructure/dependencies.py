@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from datetime import datetime
 from .config import Settings, get_settings
@@ -8,6 +8,7 @@ from ..agent import OpenRouterAgent
 from ..repository import OpportunityRepository
 from .data_package import DatasetLoader
 from .tracing import Tracer
+from ..batching import SearchBatchCache
 
 
 @dataclass
@@ -18,6 +19,7 @@ class AppDependencies:
     agent: OpenRouterAgent
     tracer: Tracer
     evaluation_time: datetime | None = None
+    batches: SearchBatchCache = field(default_factory=SearchBatchCache)
 
     def readiness(self) -> tuple[dict[str, bool], dict[str, str]]:
         from ..workflow import application_is_ready

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Constraints, DiscoveryResponse, Profile, Recommendation, ViewState } from './types';
+import type { Constraints, DiscoveryResponse, Profile, Recommendation, SimilarAlternative, ViewState } from './types';
 import { discover } from './api/client';
 import { loadInitialProfile, persistProfile } from './profile/profile';
 import Header from './components/Header';
@@ -16,12 +16,13 @@ export default function App() {
   const [view, setView] = useState<ViewState>('initial');
   const [res, setRes] = useState<DiscoveryResponse | null>(null);
   const [editing, setEditing] = useState(false);
-  const [details, setDetails] = useState<Recommendation | null>(null);
+  const [details, setDetails] = useState<Recommendation | SimilarAlternative | null>(null);
   const queryRef = useRef<HTMLTextAreaElement>(null);
   const seq = useRef(0);
   const pending = useRef(false);
   const controller = useRef<AbortController | null>(null);
-  const submitted = useRef<{ query: string; profile: Profile; constraints: Constraints } | null>(null);
+  const batchRetry = useRef<{ token: string; index: number } | null>(null);
+  const submitted = useRef<{ query: string; profile: Profile; constraints: Constraints; constraint_resolution?: 'profile' | 'query' } | null>(null);
   useEffect(() => () => { ++seq.current; controller.current?.abort(); }, []);
 
   useEffect(() => persistProfile(profile, constraints), [profile, constraints]);
@@ -33,19 +34,21 @@ export default function App() {
     controller.current?.abort();
     pending.current = false;
     submitted.current = null;
+    batchRetry.current = null;
     setRes(null);
     setDetails(null);
     setView('initial');
   }
 
-  async function runDiscover(p: Profile = profile, c: Constraints = constraints, resolution?: 'profile' | 'query') {
+  async function runDiscover(p: Profile = profile, c: Constraints = constraints, resolution?: 'profile' | 'query', page?: { token: string; index: number }) {
     if (pending.current) return;
-    const snapshot = resolution ? submitted.current : { query: query.trim(), profile: p, constraints: c };
+    const snapshot = resolution || page ? submitted.current : { query: query.trim(), profile: p, constraints: c };
     if (!snapshot) return;
     const q = snapshot.query;
     if (!q) { queryRef.current?.focus(); return; }
     // Results and resolution actions share the exact submitted input snapshot.
-    submitted.current = structuredClone(snapshot);
+    submitted.current = structuredClone({ ...snapshot, constraint_resolution: resolution ?? snapshot.constraint_resolution });
+    batchRetry.current = page ?? null;
     const id = ++seq.current;
     controller.current?.abort();
     controller.current = new AbortController();
@@ -53,8 +56,10 @@ export default function App() {
     setView('loading');
     setRes(null);
     try {
-      const r = await discover({ request_id: null, ...submitted.current, constraint_resolution: resolution }, controller.current.signal);
+      const r = await discover({ request_id: null, ...submitted.current,
+        batch_token: page?.token, batch_index: page?.index ?? 0 }, controller.current.signal);
       if (id !== seq.current) return;
+      if (r.status !== 'error' || r.error_code === 'FURSAH_BATCH_EXPIRED') batchRetry.current = null;
       setRes(r);
       setView(r.status);
     } catch {
@@ -84,9 +89,10 @@ export default function App() {
           res={res}
           onEditProfile={() => setEditing(true)}
           onResolve={choice => runDiscover(profile, constraints, choice)}
-          onRetry={() => runDiscover()}
+          onRetry={() => runDiscover(profile, constraints, undefined, batchRetry.current ?? undefined)}
           onFocusQuery={() => queryRef.current?.focus()}
           onOpenDetails={setDetails}
+          onBatch={index => { if (res?.batch_token) runDiscover(profile, constraints, undefined, { token: res.batch_token, index }); }}
         />
       </main>
 

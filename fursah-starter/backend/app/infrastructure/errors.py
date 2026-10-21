@@ -56,3 +56,9 @@ class RecordNotFound(FursahError):
     public_code = ErrorCode.OPPORTUNITY_NOT_FOUND
     http_status = 404
     public_message = "The requested opportunity was not found."
+
+
+class BatchExpiredError(FursahError):
+    public_code = 'FURSAH_BATCH_EXPIRED'
+    http_status = 409
+    public_message = 'This search session expired or changed. Run a new search.'

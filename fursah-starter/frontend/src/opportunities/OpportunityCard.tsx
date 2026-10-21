@@ -1,4 +1,4 @@
-import type { EligibilityStatus, Recommendation } from '../types';
+import type { ConstraintIssue, EligibilityStatus, Recommendation } from '../types';
 import { UNKNOWN, fmtDeadline, label, modeLabel } from '../labels';
 
 
@@ -15,9 +15,10 @@ export function EligibilityBadge({ status }: { status: EligibilityStatus }) {
 interface Props {
   rec: Recommendation;
   onOpen: () => void;
+  failedConstraints?: ConstraintIssue[];
 }
 
-export default function OpportunityCard({ rec, onOpen }: Props) {
+export default function OpportunityCard({ rec, onOpen, failedConstraints }: Props) {
   const meta = [label(rec.opportunity_type), rec.location, modeLabel(rec.delivery_mode)].filter(Boolean).join(' · ') || 'النوع والموقع غير معروفين';
   return (
     <article className="card opp">
@@ -41,9 +42,17 @@ export default function OpportunityCard({ rec, onOpen }: Props) {
       </div>
       {rec.eligibility_status !== 'confirmed' && <div className="opp__note">بعض المتطلبات لا تزال بحاجة إلى تحقق.</div>}
 
+      {!!failedConstraints?.length && <div className="notice" role="note">
+        <strong>بديل غير مطابق لجميع القيود</strong>
+        <ul>{failedConstraints.map(issue => <li key={issue.field}>{issue.status === 'unknown' ? 'غير معروف: ' : 'غير مطابق: '}{issue.message}</li>)}</ul>
+      </div>}
+      {rec.match_summary && <div className="block">
+        <div className="section-label">أوجه المطابقة المثبتة</div>
+        <div className="block__text">{rec.match_summary}</div>
+      </div>}
       {rec.reason && (
         <div className="block">
-          <div className="section-label">لماذا تناسبك</div>
+          <div className="section-label">اقتباس من المصدر</div>
           <div className="block__text">{rec.reason}</div>
         </div>
       )}

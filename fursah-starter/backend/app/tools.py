@@ -37,11 +37,12 @@ def check_deadline(opportunity_id, repo, evaluation_time):
     return deadline_state(record.deadline, evaluation_time)
 
 
-def rank_candidates(records, plan, profile):
+def rank_candidates(records, plan, profile, *, limit=3):
     # Subject match dominates; interests only break ties. Stable ordering is repeatable.
     def score(record):
         text = record.title + ' ' + ' '.join(record.topics)
         subject = sum(contains(text, term) for term in plan.keywords)
         interest = sum(contains(text, term) for term in profile.interests)
         return subject * 10 + min(interest, 5)
-    return sorted(records, key=lambda record: (-score(record), record.opportunity_id))[:3]
+    ordered = sorted(records, key=lambda record: (-score(record), record.opportunity_id))
+    return ordered if limit is None else ordered[:limit]

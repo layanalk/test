@@ -80,6 +80,14 @@ class DiscoveryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     profile: UserProfile
     constraints: SearchConstraints
+    batch_token: Annotated[str, StringConstraints(min_length=16, max_length=80)] | None = None
+    batch_index: int = Field(default=0, strict=True, ge=0)
+
+    @model_validator(mode='after')
+    def pagination_requires_session(self):
+        if self.batch_index and not self.batch_token:
+            raise ValueError('A later batch requires a search session')
+        return self
 
     @field_validator("query")
     @classmethod
@@ -101,10 +109,23 @@ class Recommendation(BaseModel):
     application_status: str | None = None
     eligibility_status: EligibilityStatus
     reason: str
+    match_summary: NonBlank | None = None
     caveats: list[str] = Field(default_factory=list)
     source_ids: list[NonBlank] = Field(min_length=1)
     relevance_score: float | None = Field(default=None, ge=0, le=100)
     next_action: str | None = None
+
+
+class ConstraintIssue(BaseModel):
+    field: Literal['location_preference', 'opportunity_types', 'delivery_modes',
+                   'available_from', 'available_to', 'max_duration_days', 'max_budget_sar']
+    status: Literal['not_met', 'unknown']
+    message: NonBlank
+
+
+class SimilarAlternative(Recommendation):
+    failed_constraints: list[ConstraintIssue] = Field(min_length=1, max_length=7)
+    eligibility_status: Literal['uncertain'] = 'uncertain'
 
 
 class DiscoveryResponse(BaseModel):
@@ -117,9 +138,22 @@ class DiscoveryResponse(BaseModel):
     interpreted_filters: list[str] = Field(default_factory=list)
     missing_explanations: list[str] = Field(default_factory=list)
     constraint_conflict: bool = False
+    similar_alternatives: list[SimilarAlternative] = Field(default_factory=list, max_length=3)
+    batch_token: Annotated[str, StringConstraints(min_length=16, max_length=80)] | None = None
+    batch_index: int = Field(default=0, strict=True, ge=0)
+    has_more: bool = False
 
     @model_validator(mode="after")
     def enforce_outcome_contract(self) -> "DiscoveryResponse":
+        if self.similar_alternatives and self.status is not DiscoveryStatus.NO_MATCH:
+            raise ValueError('Only no_match can carry explicitly non-matching alternatives')
+        if self.status is not DiscoveryStatus.OK and (self.batch_token or self.batch_index or self.has_more):
+            raise ValueError('Only successful searches can be paginated')
+        if (self.batch_index or self.has_more) and not self.batch_token:
+            raise ValueError('Pagination requires a search session')
+        ids = [r.opportunity_id for r in self.recommendations + self.similar_alternatives]
+        if len(ids) != len(set(ids)):
+            raise ValueError('Duplicate result IDs')
         if self.status is DiscoveryStatus.OK:
             if not 1 <= len(self.recommendations) <= 3:
                 raise ValueError("ok responses require 1 to 3 recommendations")

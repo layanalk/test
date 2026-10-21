@@ -1,4 +1,4 @@
-import type { DiscoveryResponse, Recommendation, ViewState } from '../types';
+import type { DiscoveryResponse, Recommendation, SimilarAlternative, ViewState } from '../types';
 import { fieldLabel, ERROR_MESSAGES } from '../labels';
 import OpportunityCard from './OpportunityCard';
 
@@ -9,11 +9,12 @@ interface Props {
   onEditProfile: () => void;
   onRetry: () => void;
   onFocusQuery: () => void;
-  onOpenDetails: (rec: Recommendation) => void;
+  onOpenDetails: (rec: Recommendation | SimilarAlternative) => void;
+  onBatch: (index: number) => void;
 }
 
 /** Renders exactly one of: initial / loading / ok / needs_info / no_match / error. */
-export default function SearchResults({ view, res, onEditProfile, onRetry, onFocusQuery, onOpenDetails, onResolve }: Props) {
+export default function SearchResults({ view, res, onEditProfile, onRetry, onFocusQuery, onOpenDetails, onResolve, onBatch }: Props) {
   return (
     <section className="results" aria-live="polite" aria-label="النتائج">
       {res?.interpreted_filters?.length ? <div className="notice"><strong>فهمنا بحثك بهذه القيود:</strong><ul>{res.interpreted_filters.map(f => <li key={f}>{f}</li>)}</ul></div> : null}
@@ -44,6 +45,11 @@ export default function SearchResults({ view, res, onEditProfile, onRetry, onFoc
           {res.recommendations.map(r => (
             <OpportunityCard key={r.opportunity_id} rec={r} onOpen={() => onOpenDetails(r)} />
           ))}
+          {res.batch_token && <nav className="state__actions" aria-label="دفعات النتائج">
+            <button className="btn btn--outline" disabled={!res.batch_index} onClick={() => onBatch((res.batch_index ?? 0) - 1)}>الدفعة السابقة</button>
+            <span>الدفعة {(res.batch_index ?? 0) + 1}</span>
+            <button className="btn btn--primary" disabled={!res.has_more} onClick={() => onBatch((res.batch_index ?? 0) + 1)}>الدفعة التالية</button>
+          </nav>}
         </>
       )}
 
@@ -68,8 +74,8 @@ export default function SearchResults({ view, res, onEditProfile, onRetry, onFoc
       )}
 
       {view === 'no_match' && (
-        <div className="card state">
-          <h2>لم نجد فرصًا تدعمها البيانات</h2>
+        <><div className="card state">
+          <h2>لا توجد فرص تستوفي جميع قيودك</h2>
           <p>{res?.message || 'لا توجد فرص مدعومة بالبيانات تطابق ملفك وقيودك الحالية.'}</p>
           <p className="muted">يمكنك تعديل تفضيلاتك والبحث مرة أخرى.</p>
           <div className="state__actions">
@@ -77,6 +83,12 @@ export default function SearchResults({ view, res, onEditProfile, onRetry, onFoc
             <button className="btn btn--quiet" onClick={onFocusQuery}>تعديل البحث</button>
           </div>
         </div>
+        {!!res?.similar_alternatives?.length && <section aria-label="بدائل قريبة">
+          <h2>بدائل قريبة — لا تستوفي كل القيود</h2>
+          <p className="notice">هذه ليست نتائج مطابقة. الاختلافات والمعلومات غير المعروفة موضحة لكل بديل؛ لم نغيّر قيود بحثك.</p>
+          {res.similar_alternatives.map(r => <OpportunityCard key={r.opportunity_id} rec={r}
+            failedConstraints={r.failed_constraints} onOpen={() => onOpenDetails(r)} />)}
+        </section>}</>
       )}
 
       {view === 'error' && (

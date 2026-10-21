@@ -87,6 +87,7 @@ export function fmtDeadline(iso?: string | null): string | null {
 export const fmtCost = (c?: number | null) => (c == null ? null : c === 0 ? 'مجاني' : `${c} ريال`);
 
 export const ERROR_MESSAGES: Record<string, string> = {
+  FURSAH_BATCH_EXPIRED: 'انتهت جلسة النتائج أو تغيرت بياناتها. اضغط إعادة المحاولة لبدء بحث جديد.',
   FURSAH_MODEL_ERROR: 'تعذر إكمال الاتصال بالنموذج. تحقق من إعدادات مزود النموذج أو أعد المحاولة.',
   FURSAH_DATA_ERROR: 'تعذر قراءة بيانات التدريب.',
   FURSAH_NETWORK_ERROR: 'تعذر الاتصال بالخادم. تحقق من تشغيله وعنوان الاتصال.',
