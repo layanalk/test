@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import urlsplit
-import ipaddress
 
 from datetime import datetime, timezone
 
@@ -25,12 +23,8 @@ class Settings(BaseSettings):
 
     framework_track: str = ""  # Optional descriptive label; no framework whitelist.
     evaluation_time: AwareDatetime | None = None
-    model_provider: str = ""
-    model_name: str = ""
-    model_api_key: str = Field(default="", repr=False)
-    model_base_url: str = ""
-    # Explicit opt-in, restricted to loopback OpenAI-compatible servers.
-    allow_keyless_local_model: bool = False
+    # Non-secret model setting. The API key is read only with os.environ in agent.py.
+    openrouter_model: str = "openai/gpt-4o-mini"
 
     model_timeout_seconds: int = Field(default=40, gt=0)
     workflow_timeout_seconds: int = Field(default=90, gt=0)
@@ -66,20 +60,6 @@ class Settings(BaseSettings):
     def allowed_origin_list(self) -> list[str]:
         return [item.strip() for item in self.allowed_origins.split(",") if item.strip()]
 
-    @property
-    def keyless_local_model(self) -> bool:
-        try:
-            url = urlsplit(self.model_base_url)
-            local = url.hostname == "localhost" or ipaddress.ip_address(url.hostname or "").is_loopback
-            return bool(self.allow_keyless_local_model and self.model_provider == "openai"
-                        and url.scheme in {"http", "https"} and local
-                        and not url.username and not url.password)
-        except ValueError:
-            return False
-
-    @property
-    def live_model_configured(self) -> bool:
-        return bool(self.model_provider.strip() and self.model_name.strip() and (self.model_api_key.strip() or self.keyless_local_model))
 
 
 def get_settings() -> Settings:

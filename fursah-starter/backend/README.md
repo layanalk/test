@@ -4,6 +4,8 @@
 
 # Backend — connect your implementation
 
+> **MVP implemented:** Follow [MVP.md](../MVP.md) for current setup, OpenRouter environment configuration and tests. The original starter instructions below remain as course reference.
+
 **Previous:** [Data](../data/README.md) · **Overview:** [Main guide](../README.md) · **Next:** [Frontend](../frontend/README.md)
 
 The supplied FastAPI shell accepts requests and returns structured errors while learner logic is unfinished. It does not implement an agent or recommendation engine.

@@ -4,6 +4,8 @@
 
 # FURSAH — فرصة
 
+> **Working MVP:** See [MVP setup and usage](MVP.md) for the implemented single-agent LangGraph/OpenRouter flow, local key configuration, full 1,000-announcement evidence-backed dataset, and tests. The course exercise guide below describes the original starter and the learning exercises.
+
 Build an opportunity-search application using your Day 1 design and the frameworks and tools you selected on Day 2.
 
 SAAI supplies **1,000 raw fictional announcements, a finished frontend and a working API shell**. You implement preparation, internal schemas, storage, model clients, prompts, retrieval, tools, orchestration and business rules. The starter does not return pretend recommendations.

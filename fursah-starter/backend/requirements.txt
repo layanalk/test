@@ -1,4 +1,4 @@
-# Base: enough to run the API shell.
+# FastAPI application and single-agent recommendation MVP.
 fastapi==0.141.1
 uvicorn[standard]==0.54.0
 pydantic==2.13.5
@@ -8,4 +8,6 @@ httpx==0.28.1
 # until Phoenix is set up. The Phoenix stack itself is in requirements-observability.txt.
 opentelemetry-api==1.44.0
 
-# Add dependencies for your chosen implementation yourself. No agent framework is required by the shell.
+
+# One recommendation workflow; OpenRouter is called with the existing httpx client.
+langgraph==1.2.16

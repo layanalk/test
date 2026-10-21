@@ -1,0 +1,10 @@
+# Local configuration and generated development outputs
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo

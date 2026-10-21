@@ -1,41 +1,68 @@
-# Learner guidance: prepare data/raw/raw_opportunities.csv using data/README.md.
-# Choose your own storage and internal schema. The bridge is an optional CSV/JSON
-# helper. Map your storage into the public API contract; rename/split this module freely.
+"""JSON-backed opportunity store. No vector database or runtime extraction."""
 from __future__ import annotations
 
-from typing import Any
-
+import hashlib
+import json
+import re
+import unicodedata
+from pydantic import ValidationError
+from .internal import OpportunityRecord, SearchPlan
+from .schemas import OpportunityDetailsResponse
 from .infrastructure.data_package import DatasetLoader
+from .infrastructure.errors import DataAccessError
+
+
+def normalize(value: str) -> str:
+    value = ''.join(c for c in unicodedata.normalize('NFKC', value).casefold()
+                    if unicodedata.category(c) != 'Mn')
+    return value.translate(str.maketrans('أإآى', 'اااي'))
+
+
+def contains(text: str, term: str) -> bool:
+    # Word boundaries prevent e.g. تحدي matching تحديد, SQL matching NoSQL.
+    return re.search(r'(?<!\w)' + re.escape(normalize(term)) + r'(?!\w)', normalize(text)) is not None
 
 
 class OpportunityRepository:
-    """TRAINEE TODO: map prepared records into application domain objects."""
-
     def __init__(self, bridge: DatasetLoader) -> None:
         self.bridge = bridge
 
+    def load(self) -> list[OpportunityRecord]:
+        try:
+            records = [OpportunityRecord.model_validate(row)
+                       for row in self.bridge.load_prepared_opportunities()]
+            if len({r.opportunity_id for r in records}) != len(records):
+                raise ValueError('Duplicate opportunity IDs')
+            raw = {r['source_id']: r for r in self.bridge.load_raw_opportunities()}
+            for record in records:
+                for source in record.sources + record.related_sources:
+                    original = raw.get(source.source_id)
+                    if (original is None or source.content != original['content']
+                            or source.source_name != original['source_name']
+                            or source.published_at.isoformat() != original['published_at']):
+                        raise ValueError('Source evidence differs from raw data')
+                fingerprint = hashlib.sha256(json.dumps(
+                    record.model_dump(mode='json', exclude={'evidence_version'}),
+                    sort_keys=True, ensure_ascii=False,
+                ).encode()).hexdigest()[:20]
+                record.evidence_version = fingerprint
+            return records
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise DataAccessError('Prepared records failed validation.') from exc
+
     def is_ready(self) -> bool:
-        """TODO: check your actual storage is accessible and usable; return a bool.
+        return bool(self.load())
 
-        Do not require the optional JSON example when using another store.
-        """
-        raise NotImplementedError("Implement readiness for your chosen storage")
+    def search(self, plan: SearchPlan) -> list[OpportunityRecord]:
+        def matches(record):
+            text = record.title + ' ' + ' '.join(record.topics) + ' ' + (record.description or '')
+            return ((not plan.keywords or any(contains(text, word) for word in plan.keywords))
+                    and not any(contains(text, word) for word in plan.excluded_keywords))
+        return [r for r in self.load() if matches(r)]
 
-    def search(self, criteria: Any):
-        """TODO: criteria -> candidate records with source evidence from your store.
+    def get_record(self, opportunity_id: str) -> OpportunityRecord | None:
+        return next((r for r in self.load() if r.opportunity_id == opportunity_id), None)
 
-        Read exported data or your database, not notebook cell outputs.
-        Internal candidate types and search technology are your choice.
-        """
-        raise NotImplementedError(
-            "TODO(FURSAH-LEARNER): implement opportunity repository search"
-        )
-
-    def get_details(self, opportunity_id: str):
-        """TODO: ID -> OpportunityDetailsResponse, or None if the ID is absent.
-
-        Map a real stored record to the public contract, retaining its source IDs.
-        """
-        raise NotImplementedError(
-            "TODO(FURSAH-LEARNER): map one prepared record into OpportunityDetailsResponse"
-        )
+    def get_details(self, opportunity_id: str) -> OpportunityDetailsResponse | None:
+        record = self.get_record(opportunity_id)
+        return OpportunityDetailsResponse.model_validate(record.model_dump()) if record else None
