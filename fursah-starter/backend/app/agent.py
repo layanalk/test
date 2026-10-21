@@ -125,7 +125,22 @@ class OpenRouterAgent:
             'A broad request may have no keywords. Extract all explicit cities, delivery modes, '
             'opportunity types, budget, calendar duration and availability dates into constraints. '
             'Preserve negation with excluded_keywords/locations/types/modes, not positive filters. '
-            'Do not infer a city, skill, date, budget or preference that is not stated.',
+            'Do not infer a city, skill, date, budget or preference that is not stated. '
+            'ARRAY RULES: keywords, excluded_keywords, excluded_locations, '
+            'excluded_types, excluded_modes, constraints.opportunity_types, and '
+            'constraints.delivery_modes must always be JSON arrays. '
+            'Use [] when unspecified; never use null, a string, or an object for these fields. '
+            'Even one value must be wrapped in an array. '
+            'constraints.location_preference must be an array of city strings when specified; '
+            'when unspecified, use null or []. Never return a single city as a scalar string. '
+            'constraints itself must be an object, never null. '
+            'Use the exact enum codes from the schema, YYYY-MM-DD dates, '
+            'and JSON numbers rather than numeric strings. '
+            'Unspecified optional scalar limits and dates remain null. '
+            'The following is a structure reference for unspecified fields, '
+            'not facts or restrictions to copy into the answer. '
+            'Populate it using only the explicit query:\n'
+            + SearchPlan().model_dump_json(),
             {'query': query}, SearchPlan,
         )
 
