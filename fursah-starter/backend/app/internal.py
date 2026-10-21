@@ -71,7 +71,7 @@ class SearchPlan(BaseModel):
 class EvidenceExplanation(BaseModel):
     model_config = ConfigDict(extra='forbid')
     opportunity_id: NonBlank
-    # The agent chooses supporting passages; server verifies each verbatim.
+    # Python selects source passages; server verifies each verbatim.
     quotes: list[Annotated[NonBlank, Field(min_length=8, max_length=160)]] = Field(min_length=1, max_length=1)
 
 

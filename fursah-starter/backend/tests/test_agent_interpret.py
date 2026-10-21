@@ -54,9 +54,10 @@ def mock_agent(settings, responses):
         assert body['model'] == 'qwen/qwen3.7-flash'
         assert body['max_tokens'] == 1800
         assert body['temperature'] == 0
-        assert body['response_format'] == {'type': 'json_object'}
-        assert 'reasoning' not in body
-        assert 'provider' not in body
+        assert body['response_format']['type'] == 'json_schema'
+        assert body['response_format']['json_schema']['strict'] is True
+        assert body['reasoning'] == {'enabled': False}
+        assert body['provider'] == {'require_parameters': True}
         response = responses[min(len(calls) - 1, len(responses) - 1)]
         content = json.dumps(response, ensure_ascii=False)
         # Match the local failure's response size without changing its valid JSON.

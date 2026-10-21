@@ -33,7 +33,7 @@ The backend reads the key **only from `os.environ['OPENROUTER_API_KEY']`**. It d
 Optional non-secret configuration:
 
 ```bash
-# Default model; replace with another JSON-capable OpenRouter model if desired.
+# Default model; the selected endpoint must support JSON Schema and reasoning-off.
 export FURSAH_OPENROUTER_MODEL='openai/gpt-4o-mini'
 # Reproducible demo date for the supplied 2026 fictional announcements.
 # Unset this variable to evaluate against actual request time instead.
@@ -84,11 +84,21 @@ Unknown skill profiles (`null`) trigger `needs_info` only for otherwise-matching
 
 ## Agent and graph
 
-`workflow.py` defines one compiled graph. `agent.py` supplies the same main agent for request interpretation and source-passage selection. OpenRouter is called directly with `httpx`; Pydantic validates its JSON responses. Raw announcement text is treated as evidence, not instructions.
+`workflow.py` defines one compiled graph and `agent.py` supplies one main agent, used **only to interpret the query**. A successful recommendation, no-match, or needs-info request normally makes **one** OpenRouter call. Python retrieves, filters, ranks, assigns IDs and selects source excerpts; no opportunity evidence is sent to the model and no second explanation call is made.
 
-Explanation requests send `reasoning: {"enabled": false}` and `provider: {"require_parameters": true}` so the provider must support reasoning-off and the other requested parameters. Interpretation requests retain their existing settings. The completion budget stays at `max_tokens: 1800`; OpenRouter documents that `max_completion_tokens` shares the same reasoning-plus-output budget, so renaming it would not resolve reasoning exhaustion. Merely excluding reasoning from the response would still consume that budget. If the selected model requires reasoning or no provider supports the requested controls, the existing controlled provider error is returned; the app does not silently remove controls, increase the budget, or add fallback requests. Live provider compatibility must be verified locally. See [OpenRouter's reasoning documentation](https://github.com/OpenRouterTeam/docs/blob/d893b1e7ae2384197b9a023d0ad87d4ec1d3ca7b/guides/best-practices/reasoning-tokens.mdx) and [provider parameter routing](https://github.com/OpenRouterTeam/docs/blob/d893b1e7ae2384197b9a023d0ad87d4ec1d3ca7b/guides/routing/provider-selection.mdx#requiring-providers-to-support-all-parameters).
+The interpretation request uses OpenRouter Chat Completions with:
 
-Search is lexical and uses structured constraints. Ranking is deterministic: subject matches first, profile interests as tie-breakers, stable ID ordering afterward. There is no vector search or claim of semantic-retrieval accuracy. Explanations are assembled from the agent's selected **verbatim source excerpts**, with IDs and quotations checked against the selected records before returning them. The model cannot set eligibility, invent a source, change selected IDs, or override hard filters.
+- `response_format: {"type": "json_schema", "json_schema": {"name": "SearchPlan", "strict": true, "schema": ...}}`, generated from the existing Pydantic schema. Every object field is required in the provider schema, unknown properties are forbidden, and absent values are explicit arrays/nulls. Local Pydantic validation remains unchanged and still checks dates, enums and numeric constraints.
+- `reasoning: {"enabled": false}` and `provider: {"require_parameters": true}`. The endpoint must support these controls; there is no automatic parameter removal or fallback to unconstrained JSON.
+- `temperature: 0`, unchanged `max_tokens: 1800`, no tools, no streaming, no extra agents. The prompt retains explicit rules for all eight array fields and asks for short keywords rather than explanations.
+
+Only `finish_reason: "stop"` with final message content that passes Pydantic is accepted. Length-limited output is rejected even when its prefix is parseable JSON. Reasoning text never substitutes for final content; fenced, malformed or incomplete JSON is not repaired or coerced. Diagnostics log schema/attempt/finish/content type/length/error types, never responses, queries, source contents, authorization headers or credentials.
+
+The shared HTTP/output retry budget remains `min(model_max_retries, model_output_retries, 2)`: **two attempts by default, at most three with configuration**, across the whole discovery request. There are no separate explanation attempts and the graph is not restarted. Transient HTTP 408/429/500/502/503/504, transport errors/timeouts and invalid output use that shared budget. Permanent provider errors (including unsupported parameters, authentication and credit errors) stop after one attempt. Defaults remain 40 seconds per HTTP operation, 90 seconds for the whole workflow and 8 graph steps. Workflow timeout cancels an outstanding asynchronous provider call.
+
+OpenRouter documents that reasoning and final output share the `max_tokens` budget; `max_completion_tokens` uses the same budget. Disabling reasoning removes unnecessary work rather than just hiding reasoning text. Support for reasoning-off and strict structured output varies **by provider endpoint**, including endpoints serving the same Qwen model. Mocks verify our request and error handling, not current live endpoint availability or compliance. An unsupported route returns a controlled provider error instead of silently changing settings or spending extra calls. See [reasoning controls](https://github.com/OpenRouterTeam/docs/blob/d893b1e7ae2384197b9a023d0ad87d4ec1d3ca7b/guides/best-practices/reasoning-tokens.mdx), [structured outputs](https://github.com/OpenRouterTeam/docs/blob/d893b1e7ae2384197b9a023d0ad87d4ec1d3ca7b/guides/features/structured-outputs.mdx), and [parameter routing](https://github.com/OpenRouterTeam/docs/blob/d893b1e7ae2384197b9a023d0ad87d4ec1d3ca7b/guides/routing/provider-selection.mdx).
+
+Search remains lexical and uses structured constraints. Ranking is deterministic: subject matches first, profile interests as tie-breakers, stable ID ordering afterward, maximum three recommendations. There is no vector search or claim of semantic-retrieval accuracy. `explanations.py` chooses one original excerpt of 8–160 characters per selected record, preferring passages containing query keywords and using stable source order to break ties. It constructs the unchanged `ExplanationBatch` Pydantic model, then the existing evidence verifier checks exact ID coverage, uniqueness and verbatim membership in the corresponding original sources. No paraphrases or invented facts enter the explanation, and eligibility remains deterministic and conservative. All 1,000 records are covered by the excerpt-verification regression test.
 
 Missing information returns through the existing `needs_info` API response. The user edits their profile and resubmits; the graph runs again. No server-side conversation history is required.
 
@@ -103,7 +113,7 @@ python -m pytest -q
 python -m pip check
 ```
 
-Tests run the actual LangGraph and FastAPI with `httpx.MockTransport` replacing only OpenRouter's HTTP boundary. They inject a fake test credential and never need a real key or make real provider calls. Coverage includes recommendations/details, maximum result count, source grounding, provenance, missing skills and resubmission, hard filters, conflicts and exclusions, deadline boundaries, missing credentials, malformed model output, errors and timeouts.
+Tests run the actual LangGraph and FastAPI with `httpx.MockTransport` replacing only OpenRouter's HTTP boundary. They inject a fake test credential and never need a real key or make real provider calls. Coverage includes complete one/two/three-result API flows, maximum result count, source grounding and hallucination rejection, all-1,000-record provenance and excerpts, missing skills/resubmission, hard filters, conflicts/exclusions, date boundaries, array shapes, native schema requests, malformed/truncated/refused output, reasoning-heavy responses, unsupported parameters, shared bounded retries, HTTP errors, provider cancellation and graph/workflow timeouts. Explanation JSON schemas remain tested for malformed and truncated data even though explanations no longer require provider JSON.
 
 From `frontend/`:
 

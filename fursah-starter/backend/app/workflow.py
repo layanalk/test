@@ -7,6 +7,7 @@ from typing import TypedDict
 from uuid import uuid4
 from langgraph.graph import END, START, StateGraph
 from langgraph.errors import GraphRecursionError
+from .explanations import build_explanations
 from .infrastructure.dependencies import AppDependencies
 from .infrastructure.errors import WorkflowBudgetExceededError
 from .internal import CandidateCheck, OpportunityRecord, SearchPlan
@@ -116,9 +117,9 @@ def rank(state):
     return {'selected': rank_candidates(state['candidates'], state['plan'], state['request'].profile)}
 
 
-async def explain(state):
+def explain(state):
     selected = state['selected']
-    batch = await state['deps'].agent.explain(state['request'].query, selected)
+    batch = build_explanations(state['plan'], selected)
     quotes = validate_explanations(batch, selected)
     recommendations = []
     for record in selected:

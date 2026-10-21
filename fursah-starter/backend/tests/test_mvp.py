@@ -45,16 +45,9 @@ def stub(deps, plan=None, failure=None):
         elif failure == 'invalid_schema':
             content = json.dumps({'unexpected': True})
         else:
-            payload = json.loads(body['messages'][1]['content'])
-            if 'opportunities' in payload:
-                items = [{'opportunity_id': r['opportunity_id'], 'quotes': [r['sources'][0]['content'][:160].strip()]}
-                         for r in payload['opportunities']]
-                if failure == 'invented_id': items[0]['opportunity_id'] = 'INVENTED'
-                if failure == 'invented_quote': items[0]['quotes'] = ['This evidence was invented by the model.']
-                content = json.dumps({'explanations': items}, ensure_ascii=False)
-            else:
-                content = (plan or SearchPlan()).model_dump_json()
-        return httpx.Response(200, json={'choices': [{'message': {'content': content}}]})
+            assert set(json.loads(body['messages'][1]['content'])) == {'query'}
+            content = (plan or SearchPlan()).model_dump_json()
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {'content': content}}]})
     deps.agent = OpenRouterAgent(deps.settings, httpx.MockTransport(handler))
     return calls
 
@@ -72,12 +65,13 @@ def test_graph_returns_three_grounded_results(deps):
     calls = stub(deps)
     result = run(deps)
     assert result.status == 'ok' and len(result.recommendations) == 3
-    assert len(calls) == 2
+    assert len(calls) == 1
     for rec in result.recommendations:
         record = deps.repository.get_record(rec.opportunity_id)
         assert rec.evidence_version == record.evidence_version and rec.source_ids == record.source_ids
         assert rec.eligibility_status == 'uncertain'
-        assert any(s.content[:160].strip() in rec.reason for s in record.sources)
+        quote = rec.reason.split('«', 1)[1].rsplit('»', 1)[0]
+        assert 8 <= len(quote) <= 160 and any(quote in s.content for s in record.sources)
     assert {r.opportunity_id for r in result.recommendations}.isdisjoint({'OPP-0014','OPP-0054','OPP-0099','OPP-0005','OPP-0045'})
 
 
@@ -125,8 +119,119 @@ def test_no_match_is_not_fake_success(deps):
     assert result.status == 'no_match' and not result.recommendations and len(calls) == 1
 
 
-@pytest.mark.parametrize('failure,exception', [('invented_id',EvidenceValidationError),('invented_quote',EvidenceValidationError),
-    ('invalid_json',InvalidModelOutputError),('invalid_schema',InvalidModelOutputError),('http',ModelExecutionError)])
+@pytest.mark.parametrize('count', [1, 2, 3, 5])
+def test_complete_api_flow_counts_results_without_any_explanation_model_call(deps, monkeypatch, count):
+    from app.schemas import DiscoveryResponse
+    from app.validation import check_candidate
+    # Real, provenance-checked records; restrict retrieval for deterministic counts.
+    eligible = [record for record in deps.repository.load()
+                if check_candidate(record, SearchConstraints(), SearchPlan(), request().profile, NOW).accepted]
+    monkeypatch.setattr(deps.repository, 'search', lambda plan: eligible[:count])
+    calls = stub(deps)
+    app.dependency_overrides[get_app_dependencies] = lambda: deps
+    try:
+        with TestClient(app) as client:
+            result = client.post('/api/v1/discover', json=request().model_dump(mode='json'))
+        assert result.status_code == 200
+        body = result.json()
+        assert body['status'] == 'ok' and len(body['recommendations']) == min(count, 3)
+        assert len(calls) == 1
+        assert DiscoveryResponse.model_validate(body).status == 'ok'
+        for rec in body['recommendations']:
+            record = next(r for r in eligible if r.opportunity_id == rec['opportunity_id'])
+            quote = rec['reason'].split('«', 1)[1].rsplit('»', 1)[0]
+            assert 8 <= len(quote) <= 160 and any(quote in s.content for s in record.sources)
+            assert rec['source_ids'] == record.source_ids and rec['evidence_version'] == record.evidence_version
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize('kind', ['no_match', 'needs_info', 'conflict'])
+def test_early_exit_flows_make_only_one_interpretation_call(deps, kind):
+    if kind == 'no_match':
+        plan, req, expected = SearchPlan(keywords=['موضوعغيرموجود']), request(), 'no_match'
+    elif kind == 'needs_info':
+        plan = SearchPlan(keywords=['Python'], constraints=SearchConstraints(
+            opportunity_types=['internship'], location_preference=['نجران']))
+        req, expected = request(query='تدريب Python'), 'needs_info'
+    else:
+        plan = SearchPlan(constraints=SearchConstraints(location_preference=['جدة']))
+        req, expected = request(query='فرص في جدة', constraints={'location_preference': ['ينبع']}), 'needs_info'
+    calls = stub(deps, plan)
+    result = run(deps, req)
+    assert result.status == expected and not result.recommendations and len(calls) == 1
+    if kind == 'conflict':
+        assert result.constraint_conflict
+
+
+@pytest.mark.parametrize('defect', ['invented_quote', 'invented_id', 'missing_id', 'duplicate_id', 'wrong_source'])
+def test_graph_still_checks_deterministic_explanations_against_original_evidence(deps, monkeypatch, defect):
+    from app import workflow
+    from app.explanations import build_explanations
+    from app.internal import ExplanationBatch
+    calls = stub(deps)
+
+    def corrupt(plan, selected):
+        payload = build_explanations(plan, selected).model_dump()
+        items = payload['explanations']
+        if defect == 'invented_quote': items[0]['quotes'] = ['Invented information absent from all original source evidence.']
+        elif defect == 'invented_id': items[0]['opportunity_id'] = 'INVENTED'
+        elif defect == 'missing_id': items.pop()
+        elif defect == 'duplicate_id': items[1]['opportunity_id'] = items[0]['opportunity_id']
+        else:
+            quote = selected[1].sources[0].content[:160].strip()
+            assert all(quote not in source.content for source in selected[0].sources)
+            items[0]['quotes'] = [quote]
+        return ExplanationBatch.model_validate(payload)
+
+    monkeypatch.setattr(workflow, 'build_explanations', corrupt)
+    with pytest.raises(EvidenceValidationError):
+        run(deps)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('kind,code,attempts', [
+    ('length', 'FURSAH_INVALID_MODEL_OUTPUT', 2),
+    ('malformed', 'FURSAH_INVALID_MODEL_OUTPUT', 2),
+    ('unsupported', 'FURSAH_MODEL_ERROR', 1),
+    ('timeout', 'FURSAH_MODEL_ERROR', 2),
+])
+def test_full_api_provider_failures_are_controlled_without_retrying_whole_graph(deps, kind, code, attempts):
+    calls = []
+
+    def provider(req):
+        calls.append(json.loads(req.content))
+        if kind == 'timeout': raise httpx.ReadTimeout('private-provider-marker')
+        if kind == 'unsupported': return httpx.Response(400, json={'error': 'private-provider-marker'})
+        return httpx.Response(200, json={'choices': [{
+            'finish_reason': 'length' if kind == 'length' else 'stop',
+            'message': {'content': None if kind == 'length' else '{private-provider-marker'},
+        }]})
+
+    deps.agent = OpenRouterAgent(deps.settings, httpx.MockTransport(provider))
+    app.dependency_overrides[get_app_dependencies] = lambda: deps
+    try:
+        with TestClient(app) as client:
+            result = client.post('/api/v1/discover', json=request().model_dump(mode='json'))
+        assert result.status_code == 503 and result.json()['error_code'] == code
+        assert len(calls) == attempts and not result.json().get('recommendations')
+        assert 'private-provider-marker' not in result.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_excerpts_for_all_1000_records_are_valid_and_preserve_original_evidence(deps):
+    from app.explanations import build_explanations
+    from app.validation import validate_explanations
+    records = deps.repository.load()
+    assert len(records) == 1000
+    for start in range(0, len(records), 3):
+        selected = records[start:start + 3]
+        batch = build_explanations(SearchPlan(keywords=['Python', 'البيانات']), selected)
+        assert len(validate_explanations(batch, selected)) == len(selected)
+
+
+@pytest.mark.parametrize('failure,exception', [('invalid_json',InvalidModelOutputError),('invalid_schema',InvalidModelOutputError),('http',ModelExecutionError)])
 def test_model_failures_are_controlled(deps, failure, exception):
     calls = stub(deps, failure=failure)
     with pytest.raises(exception): run(deps)
@@ -215,6 +320,31 @@ def test_workflow_timeout_is_bounded(deps):
     with pytest.raises(WorkflowBudgetExceededError): run(deps)
 
 
+def test_workflow_timeout_cancels_pending_provider_call_without_starting_retry(deps):
+    calls, cancelled = [], []
+
+    async def provider(req):
+        calls.append(req)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(True)
+
+    deps.agent = OpenRouterAgent(deps.settings, httpx.MockTransport(provider))
+    deps.settings.workflow_timeout_seconds = 0.01
+    with pytest.raises(WorkflowBudgetExceededError):
+        run(deps)
+    assert len(calls) == 1 and cancelled == [True]
+
+
+def test_graph_step_budget_still_stops_workflow(deps):
+    calls = stub(deps)
+    deps.settings.max_workflow_steps = 1
+    with pytest.raises(WorkflowBudgetExceededError):
+        run(deps)
+    assert len(calls) == 1
+
+
 def test_incompatible_saved_and_query_date_bounds_need_user_choice(deps):
     stub(deps, SearchPlan(constraints=SearchConstraints(available_to='2026-11-01')))
     req = request(constraints={'available_from': '2026-12-01'})
@@ -275,7 +405,7 @@ def test_transient_openrouter_failure_retries_once(deps):
         calls.append(req)
         if len(calls) == 1:
             return httpx.Response(429, json={'error': 'rate limited'})
-        return httpx.Response(200, json={'choices': [{'message': {'content': SearchPlan().model_dump_json()}}]})
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {'content': SearchPlan().model_dump_json()}}]})
     deps.agent = OpenRouterAgent(deps.settings, httpx.MockTransport(handler))
     plan = asyncio.run(deps.agent.interpret('فرص مناسبة'))
     assert plan.keywords == [] and len(calls) == 2
