@@ -9,6 +9,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 from .internal import SearchPlan
 from .infrastructure.errors import InvalidModelOutputError, ModelExecutionError
+from .provider_diagnostics import log_provider_failure, transport_kind
 
 
 def _provider_schema(schema: type[BaseModel]) -> dict:
@@ -41,6 +42,9 @@ class OpenRouterAgent:
     async def _structured(self, task: str, payload: dict, schema: type[BaseModel]):
         key = os.environ.get('OPENROUTER_API_KEY', '').strip()
         if not key:
+            logging.getLogger('uvicorn.error').warning(
+                'FURSAH provider request not sent: reason=missing_process_credential'
+            )
             raise ModelExecutionError('OpenRouter is not configured in the process environment.')
         messages = [
             {'role': 'system', 'content': (
@@ -76,6 +80,8 @@ class OpenRouterAgent:
                         headers={'Authorization': f'Bearer {key}'},
                         json=request_body,
                     )
+                if response.status_code >= 300:
+                    log_provider_failure(request_body, attempt + 1, retries + 1, response=response)
                 if response.status_code in (408, 429, 500, 502, 503, 504) and attempt < retries:
                     await asyncio.sleep(0.2)
                     continue
@@ -138,8 +144,11 @@ class OpenRouterAgent:
                         error_types,
                     )
                     raise
-            except (httpx.HTTPError, OSError):
+            except (httpx.HTTPError, OSError) as exc:
                 # Never include provider response bodies, headers or exception strings.
+                if not isinstance(exc, httpx.HTTPStatusError):
+                    log_provider_failure(request_body, attempt + 1, retries + 1,
+                                         transport=transport_kind(exc))
                 if attempt == retries:
                     raise ModelExecutionError() from None
             except (ValidationError, ValueError, KeyError, IndexError, TypeError):
