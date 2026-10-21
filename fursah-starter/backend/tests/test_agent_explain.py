@@ -41,7 +41,7 @@ def batch_for(records, longest=False):
     ]}
 
 
-def mock_agent(settings, responses):
+def mock_agent(settings, responses, reasoning_text=None):
     calls = []
 
     def handler(request):
@@ -50,12 +50,18 @@ def mock_agent(settings, responses):
         assert calls[-1]['max_tokens'] == 1800
         assert calls[-1]['response_format'] == {'type': 'json_object'}
         assert calls[-1]['temperature'] == 0
+        assert calls[-1]['reasoning'] == {'enabled': False}
+        assert calls[-1]['provider'] == {'require_parameters': True}
         content, finish = responses[min(len(calls) - 1, len(responses) - 1)]
         if content is not None and not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False, separators=(',', ':'))
-        return httpx.Response(200, json={'choices': [{
-            'finish_reason': finish, 'message': {'content': content},
-        }]})
+        message = {'content': content}
+        response = {'choices': [{'finish_reason': finish, 'message': message}]}
+        if reasoning_text is not None:
+            message['reasoning'] = reasoning_text
+            response['usage'] = {'completion_tokens': 1800,
+                                 'completion_tokens_details': {'reasoning_tokens': 1800}}
+        return httpx.Response(200, json=response)
 
     return OpenRouterAgent(settings, httpx.MockTransport(handler)), calls
 
@@ -159,3 +165,61 @@ def test_short_schema_valid_output_still_requires_original_evidence(settings, re
     assert len(calls) == 1
     with pytest.raises(EvidenceValidationError):
         validate_explanations(result, selected)
+
+
+@pytest.mark.parametrize('count', [1, 2, 3])
+def test_provider_boundary_disables_reasoning_without_raising_token_budget(settings, records, count):
+    calls = []
+    selected = records[:count]
+
+    def provider(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        assert body['max_tokens'] == 1800 and 'max_completion_tokens' not in body
+        # Simulated provider behavior: uncontrolled reasoning exhausts the budget;
+        # reasoning-off leaves the original budget available for the concise JSON.
+        if body.get('reasoning') == {'enabled': False}:
+            assert body['provider'] == {'require_parameters': True}
+            return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {
+                'content': json.dumps(batch_for(selected), ensure_ascii=False),
+            }}], 'usage': {'completion_tokens': 300, 'completion_tokens_details': {'reasoning_tokens': 0}}})
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'length', 'message': {
+            'content': None, 'reasoning': 'Synthetic reasoning exhausted the completion budget.',
+        }}], 'usage': {'completion_tokens': 1800, 'completion_tokens_details': {'reasoning_tokens': 1800}}})
+
+    agent = OpenRouterAgent(settings, httpx.MockTransport(provider))
+    result = asyncio.run(agent.explain('Python', selected))
+    assert len(calls) == 1 and len(validate_explanations(result, selected)) == count
+
+
+def test_reasoning_text_is_never_parsed_as_final_json_or_logged(settings, records, caplog):
+    # Even schema-valid JSON in reasoning must not substitute for absent final content.
+    reasoning = json.dumps(batch_for(records), ensure_ascii=False)
+    agent, calls = mock_agent(settings, [(None, 'length')], reasoning_text=reasoning)
+    with pytest.raises(InvalidModelOutputError):
+        asyncio.run(agent.explain('Python', records))
+    assert len(calls) == 2
+    logs = '\n'.join(record.getMessage() for record in caplog.records if record.name == 'uvicorn.error')
+    assert 'finish=length' in logs and 'content_kind=NoneType content_chars=0' in logs
+    assert reasoning not in logs and records[0].sources[0].content not in logs
+    assert "error_types=['json_type']" in logs
+
+
+def test_unsupported_reasoning_control_fails_without_silent_fallback(settings, records, caplog):
+    from app.infrastructure.errors import ModelExecutionError
+    calls = []
+
+    def provider(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        assert body['reasoning'] == {'enabled': False}
+        assert body['provider'] == {'require_parameters': True}
+        return httpx.Response(400, json={'error': {'message': 'synthetic-unsupported-reasoning-marker'}})
+
+    agent = OpenRouterAgent(settings, httpx.MockTransport(provider))
+    with pytest.raises(ModelExecutionError):
+        asyncio.run(agent.explain('Python', records))
+    # Preserve the existing HTTP-error retry budget. Every attempt keeps the
+    # controls; there is no larger-budget or uncontrolled fallback request.
+    assert len(calls) == 2
+    assert 'synthetic-unsupported-reasoning-marker' not in caplog.text

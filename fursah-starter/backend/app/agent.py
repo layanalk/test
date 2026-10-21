@@ -22,7 +22,7 @@ class OpenRouterAgent:
         # Read ONLY this process environment variable. Never retain or log it.
         return bool(os.environ.get('OPENROUTER_API_KEY', '').strip())
 
-    async def _structured(self, task: str, payload: dict, schema: type[BaseModel]):
+    async def _structured(self, task: str, payload: dict, schema: type[BaseModel], *, disable_reasoning: bool = False):
         key = os.environ.get('OPENROUTER_API_KEY', '').strip()
         if not key:
             raise ModelExecutionError('OpenRouter is not configured in the process environment.')
@@ -36,6 +36,17 @@ class OpenRouterAgent:
             )},
             {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
         ]
+        request_body = {
+            'model': self.settings.openrouter_model, 'messages': messages,
+            'temperature': 0, 'max_tokens': 1800,
+            'response_format': {'type': 'json_object'},
+        }
+        if disable_reasoning:
+            # Excluding reasoning only hides it; disabling avoids spending the
+            # shared completion budget on it. Do not route to providers that
+            # silently ignore unsupported request parameters.
+            request_body['reasoning'] = {'enabled': False}
+            request_body['provider'] = {'require_parameters': True}
         # One bounded retry budget for HTTP failures and malformed structured output.
         retries = min(self.settings.model_max_retries, self.settings.model_output_retries, 2)
         for attempt in range(retries + 1):
@@ -48,9 +59,7 @@ class OpenRouterAgent:
                     response = await client.post(
                         self.endpoint,
                         headers={'Authorization': f'Bearer {key}'},
-                        json={'model': self.settings.openrouter_model, 'messages': messages,
-                              'temperature': 0, 'max_tokens': 1800,
-                              'response_format': {'type': 'json_object'}},
+                        json=request_body,
                     )
                 if response.status_code in (429, 502, 503, 504) and attempt < retries:
                     await asyncio.sleep(0.2)
@@ -156,5 +165,5 @@ class OpenRouterAgent:
                 {'opportunity_id': r.opportunity_id,
                  'sources': [s.model_dump(mode='json') for s in r.sources]}
                 for r in records
-            ]}, ExplanationBatch,
+            ]}, ExplanationBatch, disable_reasoning=True,
         )
