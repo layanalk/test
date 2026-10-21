@@ -1,7 +1,7 @@
 """Deterministic source excerpts; no model-generated identifiers or evidence."""
 from .infrastructure.errors import EvidenceValidationError
 from .internal import EvidenceExplanation, ExplanationBatch, OpportunityRecord, SearchPlan
-from .repository import contains, normalize
+from .repository import contains, normalize, topic_matches
 from datetime import date
 
 
@@ -19,7 +19,7 @@ def build_explanations(plan: SearchPlan, records: list[OpportunityRecord]) -> Ex
         if not passages:
             raise EvidenceValidationError()
         # Prefer query subject evidence; stable source/window order breaks ties.
-        quote = max(passages, key=lambda text: sum(contains(text, term) for term in plan.keywords))
+        quote = max(passages, key=lambda text: sum(topic_matches(text, term) for term in plan.keywords))
         explanations.append(EvidenceExplanation(opportunity_id=record.opportunity_id, quotes=[quote]))
     return ExplanationBatch(explanations=explanations)
 
@@ -28,10 +28,11 @@ def build_match_summary(record, plan, constraints, profile) -> str:
     """Describe only proven positive matches; never infer overall eligibility."""
     text = record.title + ' ' + ' '.join(record.topics) + ' ' + (record.description or '')
     clauses = []
-    subjects = [term for term in plan.keywords if contains(text, term)][:2]
-    interests = [term for term in profile.interests if contains(text, term)][:2]
+    subjects = [term for term in plan.keywords if topic_matches(text, term)][:2]
+    interests = [term for term in profile.interests if topic_matches(text, term)][:2]
     if subjects:
-        clauses.append('يطابق موضوع بحثك: ' + '، '.join(subjects))
+        label = 'يطابق موضوع بحثك: ' if all(contains(text, term) for term in subjects) else 'يرتبط بموضوع بحثك: '
+        clauses.append(label + '، '.join(subjects))
     if interests:
         clauses.append('يرتبط باهتماماتك: ' + '، '.join(interests))
     modes = {'online': 'عن بعد', 'in_person': 'حضوري', 'hybrid': 'مدمج'}

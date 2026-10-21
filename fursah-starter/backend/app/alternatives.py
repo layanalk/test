@@ -1,5 +1,5 @@
 """Small deterministic near misses, explicitly separate from strict matches."""
-from .repository import contains, normalize
+from .repository import normalize, topic_matches
 from .schemas import SearchConstraints
 from .tools import rank_candidates
 from .validation import check_candidate, constraint_issues
@@ -14,11 +14,11 @@ def select_similar(records, plan, constraints, profile, evaluation_time):
         if not checked.accepted:
             continue
         text = record.title + ' ' + ' '.join(record.topics) + ' ' + (record.description or '')
-        if any(contains(text, term) for term in plan.excluded_keywords):
+        if any(topic_matches(text, term) for term in plan.excluded_keywords):
             continue
         terms = plan.keywords or profile.interests
         if terms:
-            meaningful = any(contains(text, term) for term in terms)
+            meaningful = any(topic_matches(text, term) for term in terms)
         else:
             meaningful = (
                 bool(constraints.opportunity_types and record.opportunity_type in constraints.opportunity_types)

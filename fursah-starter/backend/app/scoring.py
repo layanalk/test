@@ -1,8 +1,8 @@
 """Deterministic coverage of supplied criteria, not an eligibility probability."""
 from fractions import Fraction
 
-from .repository import contains, normalize
-from .validation import constraint_issues
+from .repository import normalize, topic_matches
+from .validation import constraint_issues, physical_location_applies
 
 
 def _terms(values):
@@ -15,9 +15,10 @@ def match_percentage(record, plan, profile, constraints) -> int:
     factors = []
     for terms, weight in ((_terms(plan.keywords), 60), (_terms(profile.interests), 25)):
         if terms:
-            factors.append((Fraction(sum(contains(text, term) for term in terms), len(terms)), weight))
+            factors.append((Fraction(sum(topic_matches(text, term) for term in terms), len(terms)), weight))
     supplied = [field for field, value in constraints.model_dump().items()
-                if value is not None and value != []]
+                if value is not None and value != []
+                and (field != 'location_preference' or physical_location_applies(record, constraints))]
     if supplied:
         failed = {issue.field for issue in constraint_issues(record, constraints)}
         factors.append((Fraction(len(supplied) - len(failed), len(supplied)), 15))

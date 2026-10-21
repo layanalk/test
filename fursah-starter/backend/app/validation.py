@@ -8,6 +8,17 @@ from .infrastructure.errors import EvidenceValidationError
 from .schemas import ConstraintIssue
 
 
+def physical_location_applies(record, constraints):
+    # A selected remote mode changes the meaning of city preference, not type.
+    # Do not waive city checks for hybrid/unknown/conflicting attendance evidence.
+    fully_remote = (record.delivery_mode == 'online'
+                    and record.remote_participation_allowed is True
+                    and record.physical_attendance_required is False
+                    and not {'delivery_mode', 'remote_participation_allowed',
+                             'physical_attendance_required', 'location'} & set(record.conflicting_fields))
+    return not (constraints.delivery_modes == ['online'] and fully_remote)
+
+
 def constraint_issues(record, constraints):
     """All unmet/unknown positive preferences; shared by strict and similar checks."""
     issues = []
@@ -20,7 +31,7 @@ def constraint_issues(record, constraints):
         allowed = getattr(constraints, field)
         if allowed and value not in allowed:
             issue(field, value, label + (' غير محدد في المصدر.' if value is None else ' لا يطابق اختيارك.'))
-    if constraints.location_preference:
+    if constraints.location_preference and physical_location_applies(record, constraints):
         if record.location is None:
             issue('location_preference', None, 'الموقع غير محدد؛ المطلوب: ' + '، '.join(constraints.location_preference))
         elif normalize(record.location) not in {normalize(v) for v in constraints.location_preference}:

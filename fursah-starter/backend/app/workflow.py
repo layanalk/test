@@ -99,7 +99,10 @@ async def interpret(state):
     for field, value in constraints.model_dump(mode='json').items():
         if value is not None and value != []:
             text = '، '.join(translations.get(v, v) for v in value) if isinstance(value, list) else str(value)
-            filters.append(labels[field] + ': ' + text)
+            label = labels[field]
+            if field == 'location_preference' and constraints.delivery_modes == ['online']:
+                label += ' (عند الحاجة إلى حضور فعلي فقط)'
+            filters.append(label + ': ' + text)
     excluded = plan.excluded_keywords + plan.excluded_locations + plan.excluded_types + plan.excluded_modes
     if excluded:
         filters.append('استبعاد: ' + '، '.join(translations.get(v, v) for v in excluded))

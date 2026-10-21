@@ -49,8 +49,8 @@ def test_inactive_factors_are_excluded_and_missing_information_is_not_invented()
 
 
 def test_each_supplied_constraint_uses_the_same_known_fact_checks_as_filtering():
-    record = opportunity(1)
-    constraints = SearchConstraints(location_preference=['الرياض'], delivery_modes=['online'],
+    record = opportunity(1, delivery_mode='hybrid')
+    constraints = SearchConstraints(location_preference=['الرياض'], delivery_modes=['hybrid'],
         opportunity_types=['workshop'], max_budget_sar=100, max_duration_days=3,
         available_from='2026-12-01', available_to='2026-12-31')
     assert match_percentage(record, SearchPlan(), UserProfile(), constraints) == 100

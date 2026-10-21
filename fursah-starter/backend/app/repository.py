@@ -23,6 +23,16 @@ def contains(text: str, term: str) -> bool:
     return re.search(r'(?<!\w)' + re.escape(normalize(term)) + r'(?!\w)', normalize(text)) is not None
 
 
+def topic_matches(text: str, term: str) -> bool:
+    # A deliberately small, directional subject vocabulary, not embeddings or
+    # record enrichment. A broad analysis query may retrieve a Power BI activity;
+    # a specific Power BI query must not retrieve every data-analysis activity.
+    analysis_terms = {'تحليل البيانات', 'تحليل بيانات', 'data analysis', 'data analytics'}
+    return contains(text, term) or (
+        normalize(term) in analysis_terms and contains(text, 'Power BI')
+    )
+
+
 class OpportunityRepository:
     def __init__(self, bridge: DatasetLoader) -> None:
         self.bridge = bridge
@@ -56,8 +66,8 @@ class OpportunityRepository:
     def search(self, plan: SearchPlan) -> list[OpportunityRecord]:
         def matches(record):
             text = record.title + ' ' + ' '.join(record.topics) + ' ' + (record.description or '')
-            return ((not plan.keywords or any(contains(text, word) for word in plan.keywords))
-                    and not any(contains(text, word) for word in plan.excluded_keywords))
+            return ((not plan.keywords or any(topic_matches(text, word) for word in plan.keywords))
+                    and not any(topic_matches(text, word) for word in plan.excluded_keywords))
         return [r for r in self.load() if matches(r)]
 
     def get_record(self, opportunity_id: str) -> OpportunityRecord | None:
