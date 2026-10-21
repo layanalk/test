@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -55,8 +56,57 @@ class OpenRouterAgent:
                     await asyncio.sleep(0.2)
                     continue
                 response.raise_for_status()
-                content = response.json()['choices'][0]['message']['content']
-                return schema.model_validate_json(content)
+                finish_reason = 'unavailable'
+                content_kind = 'unavailable'
+                content_chars = 0
+
+                try:
+                    choice = response.json()['choices'][0]
+                    content = choice['message']['content']
+                    content_kind = type(content).__name__
+                    content_chars = len(content) if isinstance(content, str) else 0
+
+                    reported_finish = choice.get('finish_reason')
+                    known_finishes = {
+                        'stop', 'length', 'content_filter', 'tool_calls', 'error'
+                    }
+                    finish_reason = (
+                        reported_finish
+                        if isinstance(reported_finish, str)
+                        and reported_finish in known_finishes
+                        else 'unknown'
+                    )
+
+                    return schema.model_validate_json(content)
+
+                except (
+                    ValidationError, ValueError, KeyError, IndexError, TypeError
+                ) as exc:
+                    if isinstance(exc, ValidationError):
+                        error_types = sorted({
+                            error['type']
+                            for error in exc.errors(
+                                include_input=False,
+                                include_context=False,
+                                include_url=False,
+                            )
+                        })
+                    else:
+                        error_types = [type(exc).__name__]
+
+                    logging.getLogger('uvicorn.error').warning(
+                        'FURSAH structured output rejected: '
+                        'schema=%s attempt=%d/%d finish=%s '
+                        'content_kind=%s content_chars=%d error_types=%s',
+                        schema.__name__,
+                        attempt + 1,
+                        retries + 1,
+                        finish_reason,
+                        content_kind,
+                        content_chars,
+                        error_types,
+                    )
+                    raise
             except (httpx.HTTPError, OSError):
                 # Never include provider response bodies, headers or exception strings.
                 if attempt == retries:
