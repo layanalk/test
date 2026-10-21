@@ -149,3 +149,52 @@ def test_registration_conflicts_cannot_reopen_a_related_closed_record(preparer):
         result = check_candidate(record, SearchPlan().constraints, SearchPlan(), UserProfile(),
                                  datetime.fromisoformat('2026-10-21T12:00:00+03:00'))
         assert not result.accepted
+
+
+@pytest.mark.parametrize('line_ending', [b'\n', b'\r\n', b'\r'])
+@pytest.mark.parametrize('with_bom', [False, True])
+def test_full_corpus_transport_newlines_preserve_exact_evidence(preparer, tmp_path, line_ending, with_bom):
+    from app.infrastructure.config import Settings
+    from app.infrastructure.data_package import DatasetLoader
+    from app.repository import OpportunityRepository
+    (tmp_path / 'raw').mkdir()
+    (tmp_path / 'prepared').mkdir()
+    raw = (DATA / 'raw/raw_opportunities.csv').read_bytes().removeprefix(b'\xef\xbb\xbf')
+    raw = raw.replace(b'\r\n', b'\n').replace(b'\r', b'\n').replace(b'\n', line_ending)
+    (tmp_path / 'raw/raw_opportunities.csv').write_bytes((b'\xef\xbb\xbf' if with_bom else b'') + raw)
+    for name in ('opportunities.json', 'preparation_report.json'):
+        # Convert physical JSON formatting newlines too, leaving escaped strings intact.
+        (tmp_path / 'prepared' / name).write_bytes((DATA / 'prepared' / name).read_bytes().replace(b'\n', line_ending))
+    records, report = preparer.prepare_with_report(tmp_path / 'raw/raw_opportunities.csv')
+    assert len(records) == 1000 and report['skipped_invalid_record_count'] == 0
+    assert records == json.loads((DATA / 'prepared/opportunities.json').read_text(encoding='utf-8'))
+    assert report == json.loads((DATA / 'prepared/preparation_report.json').read_text(encoding='utf-8'))
+    baseline = OpportunityRepository(DatasetLoader(Settings(_env_file=None, data_dir=DATA))).load()
+    restored = OpportunityRepository(DatasetLoader(Settings(_env_file=None, data_dir=tmp_path))).load()
+    assert len(restored) == 1000
+    # Content and evidence fingerprints must agree across LF, CRLF, CR and BOM variants.
+    assert [r.model_dump() for r in restored] == [r.model_dump() for r in baseline]
+
+
+@pytest.mark.parametrize('field,value', [
+    ('content', 'Original evidence was changed'),
+    ('source_name', 'A different publisher'),
+    ('published_at', '2026-09-29T12:20:00+03:00'),
+    ('content', None),  # Even adding whitespace must still fail exact comparison.
+])
+def test_windows_checkout_does_not_hide_evidence_tampering(tmp_path, field, value):
+    from app.infrastructure.config import Settings
+    from app.infrastructure.data_package import DatasetLoader
+    from app.infrastructure.errors import DataAccessError
+    from app.repository import OpportunityRepository
+    (tmp_path / 'raw').mkdir()
+    (tmp_path / 'prepared').mkdir()
+    raw = (DATA / 'raw/raw_opportunities.csv').read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+    (tmp_path / 'raw/raw_opportunities.csv').write_bytes(raw)
+    records = json.loads((DATA / 'prepared/opportunities.json').read_text(encoding='utf-8'))
+    evidence = records[0]['sources'][0]
+    evidence[field] = value if value is not None else evidence[field] + ' '
+    (tmp_path / 'prepared/opportunities.json').write_text(json.dumps(records), encoding='utf-8', newline='\n')
+    repo = OpportunityRepository(DatasetLoader(Settings(_env_file=None, data_dir=tmp_path)))
+    with pytest.raises(DataAccessError, match='Prepared records failed validation'):
+        repo.load()

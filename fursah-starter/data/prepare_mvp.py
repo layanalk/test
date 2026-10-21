@@ -164,7 +164,9 @@ def extract_record(row, titles, issues):
 
 def prepare_with_report(csv_path=None):
     path = Path(csv_path) if csv_path is not None else ROOT / 'raw/raw_opportunities.csv'
-    with path.open(encoding='utf-8-sig', newline='') as stream:
+    # Match DatasetLoader's universal-newline decoding, including quoted cells.
+    # Only transport line endings are canonicalized; no source text is stripped.
+    with path.open(encoding='utf-8-sig', newline=None) as stream:
         reader = csv.DictReader(stream, strict=True)
         if reader.fieldnames != RAW_COLUMNS:
             raise ValueError('Unexpected raw CSV headers; refusing to overwrite prepared data')
@@ -279,7 +281,7 @@ if __name__ == '__main__':
     destination.mkdir(parents=True, exist_ok=True)
     for name, value in [('opportunities.json', records), ('preparation_report.json', report)]:
         temporary = destination / (name + '.tmp')
-        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', encoding='utf-8', newline='\n')
         temporary.replace(destination / name)
     print(json.dumps({k: v for k, v in report.items() if not isinstance(v, (dict, list))}, ensure_ascii=False, indent=2))
     print('Unknown important fields:', json.dumps(report['unknown_important_field_counts']))

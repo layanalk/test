@@ -1,0 +1,3 @@
+# Keep dataset transport newlines consistent even with core.autocrlf=true.
+/data/raw/raw_opportunities.csv text eol=lf
+/data/prepared/*.json text eol=lf

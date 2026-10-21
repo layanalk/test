@@ -192,7 +192,7 @@ def test_full_dataset_is_reproducible_and_preserves_evidence(deps, monkeypatch):
     spec = importlib.util.spec_from_file_location('prepare_mvp', data / 'prepare_mvp.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert module.prepare() == json.loads((data / 'prepared/opportunities.json').read_text())
+    assert module.prepare() == json.loads((data / 'prepared/opportunities.json').read_text(encoding='utf-8'))
 
 
 @pytest.mark.parametrize('deadline,expected', [('2026-10-20','expired'),('2026-10-21','uncertain'),
@@ -250,7 +250,7 @@ def test_date_window_and_location_never_admit_unknown_matches(deps):
 
 def test_corrupt_store_does_not_claim_readiness(deps, tmp_path):
     (tmp_path / 'prepared').mkdir()
-    (tmp_path / 'prepared/opportunities.json').write_text('[{"opportunity_id":"broken"}]')
+    (tmp_path / 'prepared/opportunities.json').write_text('[{"opportunity_id":"broken"}]', encoding='utf-8')
     deps.bridge.data_dir = tmp_path
     checks, _ = deps.readiness()
     assert not checks['storage']
@@ -262,9 +262,9 @@ def test_rewritten_source_evidence_is_rejected(deps, tmp_path):
     (tmp_path / 'prepared').mkdir()
     (tmp_path / 'raw').mkdir()
     (tmp_path / 'raw/raw_opportunities.csv').write_bytes((data / 'raw/raw_opportunities.csv').read_bytes())
-    records = json.loads((data / 'prepared/opportunities.json').read_text())
+    records = json.loads((data / 'prepared/opportunities.json').read_text(encoding='utf-8'))
     records[0]['sources'][0]['content'] = 'Changed source evidence'
-    (tmp_path / 'prepared/opportunities.json').write_text(json.dumps(records))
+    (tmp_path / 'prepared/opportunities.json').write_text(json.dumps(records), encoding='utf-8')
     deps.bridge.data_dir = tmp_path
     with pytest.raises(DataAccessError): deps.repository.load()
 
@@ -321,5 +321,23 @@ def test_full_dataset_recommendation_api_respects_three_result_limit(deps):
                 details = client.get('/api/v1/opportunities/' + rec['opportunity_id'])
                 assert details.status_code == 200
                 assert details.json()['evidence_version'] == rec['evidence_version']
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ready_storage_accepts_windows_csv_checkout(deps, tmp_path):
+    data = deps.settings.data_dir
+    (tmp_path / 'raw').mkdir()
+    (tmp_path / 'prepared').mkdir()
+    raw = (data / 'raw/raw_opportunities.csv').read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+    (tmp_path / 'raw/raw_opportunities.csv').write_bytes(raw)
+    (tmp_path / 'prepared/opportunities.json').write_bytes((data / 'prepared/opportunities.json').read_bytes())
+    deps.bridge.data_dir = tmp_path
+    app.dependency_overrides[get_app_dependencies] = lambda: deps
+    try:
+        with TestClient(app) as client:
+            result = client.get('/ready')
+            assert result.status_code == 200
+            assert result.json()['checks'] == {'storage': True, 'application': True}
     finally:
         app.dependency_overrides.clear()

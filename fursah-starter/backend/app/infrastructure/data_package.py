@@ -61,7 +61,10 @@ class DatasetLoader:
         """Return announcements as text, without solving the preparation exercise."""
         path = self.data_dir / "raw" / "raw_opportunities.csv"
         try:
-            with path.open(encoding="utf-8-sig", newline="") as stream:
+            # Decode physical LF/CRLF/CR as LF, including inside quoted CSV cells.
+            # Git on Windows can change those physical newlines; escaped newlines
+            # in prepared JSON stay LF. Preserve every other evidence character.
+            with path.open(encoding="utf-8-sig", newline=None) as stream:
                 reader = csv.DictReader(stream, strict=True)
                 if reader.fieldnames != RAW_COLUMNS:
                     raise DataAccessError("Raw CSV columns do not match data/README.md.")
