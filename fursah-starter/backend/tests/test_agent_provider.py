@@ -45,7 +45,7 @@ def test_native_schema_enforces_all_fields_arrays_enums_and_nulls(settings):
     assert result == SearchPlan() and len(calls) == 1
     body = calls[0]
     assert body['reasoning'] == {'enabled': False}
-    assert body['provider'] == {'require_parameters': True}
+    assert 'provider' not in body
     assert body['max_tokens'] == 1800 and 'max_completion_tokens' not in body
     wire = body['response_format']
     assert wire['type'] == 'json_schema'
@@ -65,6 +65,45 @@ def test_native_schema_enforces_all_fields_arrays_enums_and_nulls(settings):
     assert SearchPlan.model_json_schema()['$defs']['SearchConstraints']['properties']['available_from']['default'] is None
     assert json.loads(body['messages'][1]['content']) == {'query': 'فرص مناسبة'}
     assert 'sources' not in body['messages'][1]['content']
+
+
+@pytest.mark.parametrize('content,finish,accepted', [
+    (SearchPlan(keywords=['Python'], constraints={'delivery_modes': ['online']}).model_dump_json(), 'stop', True),
+    ('{"keywords":[', 'stop', False),
+    ('{"keywords":"Python"}', 'stop', False),
+    ('{"unexpected":true}', 'stop', False),
+    (SearchPlan(keywords=['Python']).model_dump_json(), 'length', False),
+])
+def test_relaxed_routing_keeps_local_validation_when_provider_ignores_schema(settings, content, finish, accepted):
+    calls = []
+
+    def route(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        # Reproduce the reported routing restriction locally, not provider support.
+        if body.get('provider', {}).get('require_parameters') is True:
+            return httpx.Response(404, json={'error': {'message':
+                'No endpoints found that support the requested parameters.'}})
+        # A routed endpoint can ignore the requested schema. Final content must
+        # still pass the existing finish-reason and Pydantic gates in the app.
+        return httpx.Response(200, json=completion(content, finish))
+
+    agent = OpenRouterAgent(settings, httpx.MockTransport(route))
+    if accepted:
+        result = asyncio.run(agent.interpret('Python online'))
+        assert result.keywords == ['Python']
+        assert result.constraints.delivery_modes == ['online']
+    else:
+        with pytest.raises(InvalidModelOutputError):
+            asyncio.run(agent.interpret('Python online'))
+    assert len(calls) == (1 if accepted else 2)
+    for body in calls:
+        assert set(body) == {'model', 'messages', 'temperature', 'max_tokens', 'response_format', 'reasoning'}
+        assert body['model'] == 'qwen/qwen3.7-flash'
+        assert body['response_format']['type'] == 'json_schema'
+        assert body['response_format']['json_schema']['strict'] is True
+        assert body['reasoning'] == {'enabled': False}
+        assert body['temperature'] == 0 and body['max_tokens'] == 1800
 
 
 @pytest.mark.parametrize('content,finish', [
@@ -146,7 +185,7 @@ def test_permanent_errors_including_unsupported_parameters_do_not_retry_or_downg
     assert len(calls) == 1
     assert calls[0]['response_format']['type'] == 'json_schema'
     assert calls[0]['reasoning'] == {'enabled': False}
-    assert calls[0]['provider'] == {'require_parameters': True}
+    assert 'provider' not in calls[0]
     assert 'private-unsupported-parameter-marker' not in caplog.text
 
 

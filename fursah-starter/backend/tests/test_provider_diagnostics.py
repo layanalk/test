@@ -36,7 +36,7 @@ def test_http_diagnostic_exposes_status_and_safe_cause_without_changing_attempts
     assert logs.count('FURSAH provider request failed:') == expected
     for value in (f'status={status}', 'model=qwen/qwen3.7-flash', f'attempt=1/2',
                   'json_schema=True', 'strict_schema=True', 'reasoning_control=True',
-                  'require_parameters=True', 'max_tokens=1800', 'temperature=0', summary):
+                  'require_parameters=False', 'max_tokens=1800', 'temperature=0', summary):
         assert value in logs
     assert f"error_codes=['{status}']" in logs
     if parameter:

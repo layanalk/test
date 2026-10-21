@@ -57,7 +57,7 @@ def mock_agent(settings, responses):
         assert body['response_format']['type'] == 'json_schema'
         assert body['response_format']['json_schema']['strict'] is True
         assert body['reasoning'] == {'enabled': False}
-        assert body['provider'] == {'require_parameters': True}
+        assert 'provider' not in body
         response = responses[min(len(calls) - 1, len(responses) - 1)]
         content = json.dumps(response, ensure_ascii=False)
         # Match the local failure's response size without changing its valid JSON.

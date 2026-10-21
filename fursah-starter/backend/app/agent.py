@@ -62,9 +62,10 @@ class OpenRouterAgent:
                 'name': schema.__name__, 'strict': True, 'schema': _provider_schema(schema),
             }},
             # Reasoning and visible JSON share max_tokens. Interpretation is
-            # extraction, not a reasoning task. Never silently drop these controls.
+            # extraction, not a reasoning task. Request reasoning-off and strict
+            # JSON without requiring every endpoint to support every parameter;
+            # local finish checks and Pydantic validation remain authoritative.
             'reasoning': {'enabled': False},
-            'provider': {'require_parameters': True},
         }
         # One bounded retry budget for HTTP failures and malformed structured output.
         retries = min(self.settings.model_max_retries, self.settings.model_output_retries, 2)
